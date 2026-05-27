@@ -20,7 +20,7 @@ pipeline {
         container('dind') {
           sh '''
             echo "Waiting for Docker daemon..."
-            until docker info >/dev/null 2>&1; do
+            until docker info > /dev/null 2>&1; do
               sleep 2
             done
             echo "Docker is ready"
@@ -33,6 +33,7 @@ pipeline {
       steps {
         container('dind') {
           sh '''
+            echo "Building Docker image..."
             docker build -t $REGISTRY/$IMAGE:$TAG .
           '''
         }
@@ -48,21 +49,54 @@ pipeline {
         )]) {
           container('dind') {
             sh '''
+              echo "Logging in to ACR..."
               echo $ACR_PASS | docker login $REGISTRY -u $ACR_USER --password-stdin
+
+              echo "Pushing image..."
               docker push $REGISTRY/$IMAGE:$TAG
             '''
           }
         }
       }
     }
+
+    stage('Deploy to AKS') {
+      steps {
+        withCredentials([usernamePassword(
+          credentialsId: 'github-creds',
+          usernameVariable: 'GIT_USER',
+          passwordVariable: 'GIT_PASS'
+        )]) {
+          container('jnlp') {
+            sh '''
+              echo "Installing kubectl..."
+              curl -LO "https://dl.k8s.io/release/$(curl -s https://dl.k8s.io/release/stable.txt)/bin/linux/amd64/kubectl"
+              chmod +x kubectl
+
+              echo "Cloning infra repo..."
+              if [ ! -d "clock-infra" ]; then
+                git clone https://$GIT_USER:$GIT_PASS@github.com/jayalekshmyps/clock-infra.git
+              fi
+
+              cd clock-infra
+
+              echo "Deploying to AKS (dev)..."
+              ./kubectl apply -k k8s/overlays/dev
+            '''
+          }
+        }
+      }
+    }
+
   }
 
   post {
     success {
-      echo "✅ Backend image built & pushed successfully"
+      echo "✅ Backend build, push, and deployment successful"
     }
     failure {
-      echo "❌ Backend pipeline failed"
+      echo "❌ Pipeline failed"
     }
   }
 }
+``
